@@ -1,0 +1,10 @@
+---
+BasedOnStyle: Google
+---
+
+Language: Cpp
+
+ColumnLimit: 80
+
+AlwaysBreakAfterDefinitionReturnType: All
+AlwaysBreakAfterReturnType: All
