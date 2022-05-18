@@ -172,7 +172,7 @@ main(int argc, const char *const *argv) {
       return EXIT_FAILURE;
     }
     struct timeval master_broadcast_timeout = {
-        .tv_sec = 10,
+        .tv_sec = 30,
         .tv_usec = 0,
     };
     struct timespec curr = start;
@@ -247,7 +247,7 @@ main(int argc, const char *const *argv) {
     }
     curr = start;
     struct timeval master_shard_timeout = {
-        .tv_sec = 10,
+        .tv_sec = 30,
         .tv_usec = 0,
     };
     while (curr.tv_sec - start.tv_sec < master_shard_timeout.tv_sec) {
@@ -356,7 +356,7 @@ heartbeat(void *state) {
     exit(EXIT_FAILURE);
   }
   struct timeval timeout = {
-      .tv_sec = 10,
+      .tv_sec = 30,
       .tv_usec = 0,
   };
   struct timespec curr = start;

@@ -165,7 +165,7 @@ main(int argc, const char *const *argv) {
     return EXIT_FAILURE;
   }
   struct timeval accept_slaves_timeout = {
-      .tv_sec = 20,
+      .tv_sec = 30,
       .tv_usec = 0,
   };
   struct timespec curr = start;
@@ -247,6 +247,7 @@ main(int argc, const char *const *argv) {
     return EXIT_FAILURE;
   }
 
+  real int_sum = 0;
   ssize_t shards_ready = 0;
   while (true) {
     fd_set dirty_rfd = rfd;
@@ -280,12 +281,14 @@ main(int argc, const char *const *argv) {
     assert(shard_idx < shards_cnt || shards[shard_idx].int_sum != 0);
     memcpy(&shards[shard_idx].int_sum, data_buf + sizeof(shard_idx),
            sizeof(shards[shard_idx].int_sum));
+    int_sum += shards[shard_idx].int_sum;
     ++shards_ready;
     if (shards_ready == shards_cnt) {
       break;
     }
   }
   assert(shards_ready == shards_cnt);
+  printf("%lg\n", int_sum);
 }
 
 void *
@@ -300,7 +303,7 @@ heartbeat(void *state) {
       exit(EXIT_FAILURE);
     }
     struct timeval timeout = {
-        .tv_sec = 20,
+        .tv_sec = 30,
         .tv_usec = 0,
     };
     struct timespec curr = start;
