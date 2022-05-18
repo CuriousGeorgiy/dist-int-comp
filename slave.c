@@ -349,9 +349,7 @@ main(int argc, const char *const *argv) {
 
 void *
 heartbeat(void *state) {
-#ifdef LOCAL
   int sk = (int)(intptr_t)state;
-#endif
 
   struct timespec start;
   int rc = clock_gettime(CLOCK_MONOTONIC_RAW, &start);
