@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 2.8.12)
 project(dist-int-comp C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_FLAGS ${CMAKE_C_FLAGS} "-std=gnu99")
 
 add_executable(dist-int-comp-master master.c)
 target_compile_definitions(dist-int-comp-master PRIVATE NDEBUG)
