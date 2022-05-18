@@ -171,10 +171,6 @@ main(int argc, const char *const *argv) {
       perror("clock_gettime failed");
       return EXIT_FAILURE;
     }
-    struct timeval master_broadcast_timeout = {
-        .tv_sec = 30,
-        .tv_usec = 0,
-    };
     struct timespec curr = start;
     fd_set rfd;
     FD_ZERO(&rfd);
@@ -183,51 +179,38 @@ main(int argc, const char *const *argv) {
     struct sockaddr_in master_addr;
     socklen_t master_addr_sz = sizeof(master_addr);
     uint64_t broadcast_msg = 0xDEADBEEF;
-    while (curr.tv_sec - start.tv_sec < master_broadcast_timeout.tv_sec) {
+    while (true) {
       fd_set dirty_rfd = rfd;
 
       int ready =
-          select(sk + 1, &dirty_rfd, NULL, NULL, &master_broadcast_timeout);
+          select(sk + 1, &dirty_rfd, NULL, NULL, NULL);
       if (ready == -1) {
         perror("select failed");
         return EXIT_FAILURE;
       }
       if (ready == 0) {
-        printf("MASTER ERROR: failed to receive broadcast message from master\n");
-        goto loop;
+        continue;
       }
 
       ssize_t bytes_read =
           recvfrom(sk, data_buf, sizeof(broadcast_msg), 0,
                    (struct sockaddr *)&master_addr, &master_addr_sz);
       if (bytes_read == 0) {
-        goto update_curr0;
+        continue;
       }
       if (bytes_read == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          goto update_curr0;
+          continue;
         }
         perror("recvfrom failed");
         return EXIT_FAILURE;
       }
       if (bytes_read != sizeof(broadcast_msg) ||
           memcmp(data_buf, &broadcast_msg, sizeof(broadcast_msg)) != 0) {
-        goto update_curr0;
+        continue;
       }
       assert(master_addr_sz == sizeof(struct sockaddr_in));
-
       break;
-
-    update_curr0:
-      rc = clock_gettime(CLOCK_MONOTONIC_RAW, &curr);
-      if (rc != 0) {
-        perror("clock_gettime failed");
-        return EXIT_FAILURE;
-      }
-    }
-    if (curr.tv_sec - start.tv_sec > master_broadcast_timeout.tv_sec) {
-      printf("MASTER ERROR: failed to receive broadcast message\n");
-      goto loop;
     }
 
     uint64_t response = 0xBEEFDED;
@@ -349,17 +332,6 @@ void *
 heartbeat(void *state) {
   int sk = (int)(intptr_t)state;
 
-  struct timespec start;
-  int rc = clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-  if (rc != 0) {
-    perror("clock_gettime failed");
-    exit(EXIT_FAILURE);
-  }
-  struct timeval timeout = {
-      .tv_sec = 30,
-      .tv_usec = 0,
-  };
-  struct timespec curr = start;
   fd_set rfd;
   FD_ZERO(&rfd);
   FD_SET(sk, &rfd);
@@ -367,48 +339,36 @@ heartbeat(void *state) {
   struct sockaddr_in master_addr;
   socklen_t master_addr_sz = sizeof(master_addr);
   uint64_t master_msg = 0xDADBEEFDAD;
-  while (curr.tv_sec - start.tv_sec < timeout.tv_sec) {
+  while (true) {
     fd_set dirty_rfd = rfd;
-    int ready = select(sk + 1, &dirty_rfd, NULL, NULL, &timeout);
+    int ready = select(sk + 1, &dirty_rfd, NULL, NULL, NULL);
     if (ready == -1) {
       perror("select failed");
       exit(EXIT_FAILURE);
     }
     if (ready == 0) {
-      printf("HEARTBEAT ERROR: failed to receive broadcast message from master\n");
-      return NULL;
+      continue;
     }
 
     ssize_t bytes_read =
         recvfrom(sk, data_buf, sizeof(master_msg), 0,
                  (struct sockaddr *)&master_addr, &master_addr_sz);
     if (bytes_read == 0) {
-      goto update_current_time;
+      continue;
     }
     if (bytes_read == -1) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        goto update_current_time;
+        continue;
       }
       perror("recvfrom failed");
       exit(EXIT_FAILURE);
     }
     if (bytes_read != sizeof(master_msg) ||
         memcmp(data_buf, &master_msg, sizeof(master_msg)) != 0) {
-      goto update_current_time;
+      continue;
     }
     assert(master_addr_sz == sizeof(struct sockaddr_in));
     break;
-
-  update_current_time:
-    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &curr);
-    if (rc != 0) {
-      perror("clock_gettime failed");
-      return NULL;
-    }
-  }
-  if (curr.tv_sec - start.tv_sec > timeout.tv_sec) {
-    printf("HEARTBEAT ERROR: failed to receive broadcast message\n");
-    return NULL;
   }
 
   while (true) {
