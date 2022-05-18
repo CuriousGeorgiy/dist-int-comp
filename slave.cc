@@ -151,10 +151,15 @@ main(int argc, const char *const *argv) {
     exit(EXIT_FAILURE);
   }
 
+  pthread_t heartbeat_tid = 0;
   while (true) {
   loop:
+    std::atomic_flag_clear(&stop_heartbeat);
+    if (heartbeat_tid != 0) {
+      pthread_join(heartbeat_tid, NULL);
+    }
+
     std::atomic_flag_test_and_set(&stop_heartbeat);
-    pthread_t heartbeat_tid;
 #ifndef LOCAL
     rc = pthread_create(&heartbeat_tid, NULL, heartbeat, NULL);
 #else
@@ -322,9 +327,6 @@ main(int argc, const char *const *argv) {
       return EXIT_FAILURE;
     }
     assert(bytes_sent == sizeof(size_t) + sizeof(real));
-
-    std::atomic_flag_clear(&stop_heartbeat);
-    pthread_join(heartbeat_tid, NULL);
   }
 }
 
