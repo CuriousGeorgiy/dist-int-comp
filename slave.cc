@@ -3,7 +3,7 @@
 #include <math.h>
 #include <netinet/in.h>
 #include <pthread.h>
-#include <stdatomic.h>
+#include <atomic>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -39,7 +39,7 @@ struct worker_state {
 
 #define DX 1e-7
 
-static atomic_flag stop_heartbeat = ATOMIC_FLAG_INIT;
+static std::atomic_flag stop_heartbeat;
 
 static void *
 heartbeat(void *state);
@@ -106,7 +106,7 @@ main(int argc, const char *const *argv) {
     perror("malloc failed");
     return EXIT_FAILURE;
   }
-  pthread_t *tids = malloc(n_threads * sizeof(tids[0]));
+  pthread_t *tids = (pthread_t *)malloc(n_threads * sizeof(tids[0]));
   if (tids == NULL) {
     perror("malloc failed");
     return EXIT_FAILURE;
@@ -117,15 +117,14 @@ main(int argc, const char *const *argv) {
     perror("socket failed");
     return EXIT_FAILURE;
   }
-  struct sockaddr_in addr = {
-      .sin_addr = INADDR_ANY,
+  struct sockaddr_in addr;
 #ifndef LOCAL
-      .sin_port = htons(SLAVE_PORT),
+      addr.sin_port = htons(SLAVE_PORT);
 #else
-      .sin_port = htons(SLAVE_PORT + port_offs),
+      addr.sin_port = htons(SLAVE_PORT + port_offs);
 #endif
-      .sin_family = AF_INET,
-  };
+      addr.sin_family = AF_INET;
+      addr.sin_addr = {INADDR_ANY};
   int rc = bind(sk, (struct sockaddr *)&addr, sizeof(addr));
   if (rc != 0) {
     perror("bind failed");
@@ -137,15 +136,14 @@ main(int argc, const char *const *argv) {
     perror("socket failed");
     exit(EXIT_FAILURE);
   }
-  struct sockaddr_in heartbeat_sk_addr = {
-      .sin_addr = INADDR_ANY,
+  struct sockaddr_in heartbeat_sk_addr;
 #ifndef LOCAL
-      .sin_port = htons(SLAVE_HEARTBEAT_PORT),
+  heartbeat_sk_addr.sin_port = htons(SLAVE_HEARTBEAT_PORT);
 #else
-      .sin_port = htons(SLAVE_HEARTBEAT_PORT + port_offs),
+  heartbeat_sk_addr.sin_port = htons(SLAVE_HEARTBEAT_PORT + port_offs);
 #endif
-      .sin_family = AF_INET,
-  };
+  heartbeat_sk_addr.sin_family = AF_INET;
+  heartbeat_sk_addr.sin_addr = {INADDR_ANY};
   rc = bind((int)heartbeat_sk, (struct sockaddr *)&heartbeat_sk_addr,
             sizeof(heartbeat_sk_addr));
   if (rc != 0) {
@@ -155,7 +153,7 @@ main(int argc, const char *const *argv) {
 
   while (true) {
   loop:
-    atomic_flag_test_and_set(&stop_heartbeat);
+    std::atomic_flag_test_and_set(&stop_heartbeat);
     pthread_t heartbeat_tid;
 #ifndef LOCAL
     rc = pthread_create(&heartbeat_tid, NULL, heartbeat, NULL);
@@ -306,7 +304,7 @@ main(int argc, const char *const *argv) {
     assert(part_sz > 0);
     assert(part_sz > 0);
   for (size_t i = 0; i < n_threads; ++i) {
-    *(struct worker_state *)(worker_states + i * worker_state_sz) =
+    *(struct worker_state *)((char *)worker_states + i * worker_state_sz) =
         (struct worker_state){
             .core = (i < n_workers) ? i % cpus_cnt : -1,
             .begin = shard_begin + ((i < n_workers) ? part_sz * (real)i : 0),
@@ -316,7 +314,7 @@ main(int argc, const char *const *argv) {
 
   for (size_t i = 0; i < n_threads; ++i) {
     rc = pthread_create(&tids[i], NULL, worker,
-                        worker_states + i * worker_state_sz);
+                        (char *)worker_states + i * worker_state_sz);
     if (rc != 0) {
       errno = rc;
       perror("pthread_create failed");
@@ -328,7 +326,7 @@ main(int argc, const char *const *argv) {
     for (size_t i = 0; i < n_threads; ++i) {
       pthread_join(tids[i], NULL);
       if (i < n_workers) {
-       int_sum += ((struct worker_state *)(worker_states + i * worker_state_sz))->sum;
+       int_sum += ((struct worker_state *)((char *)worker_states + i * worker_state_sz))->sum;
       }
     }
 
@@ -342,7 +340,7 @@ main(int argc, const char *const *argv) {
     }
     assert(bytes_sent == sizeof(size_t) + sizeof(real));
 
-    atomic_flag_clear(&stop_heartbeat);
+    std::atomic_flag_clear(&stop_heartbeat);
     pthread_join(heartbeat_tid, NULL);
   }
 }
@@ -414,7 +412,7 @@ heartbeat(void *state) {
   }
 
   while (true) {
-    bool flag = atomic_flag_test_and_set(&stop_heartbeat);
+    bool flag = std::atomic_flag_test_and_set(&stop_heartbeat);
     if (!flag) {
       return NULL;
     }
@@ -434,7 +432,7 @@ heartbeat(void *state) {
 
 void *
 worker(void *state) {
-  struct worker_state *worker_state = state;
+  struct worker_state *worker_state = (struct worker_state *)state;
   if (worker_state->core != -1) {
     cpu_set_t cpu_set;
     CPU_ZERO(&cpu_set);
