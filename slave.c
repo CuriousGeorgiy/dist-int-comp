@@ -3,7 +3,6 @@
 #include <math.h>
 #include <netinet/in.h>
 #include <pthread.h>
-#include <atomic>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -38,8 +37,6 @@ struct worker_state {
 };
 
 #define DX 1e-7
-
-static std::atomic_flag stop_heartbeat;
 
 static void *
 heartbeat(void *state);
@@ -117,14 +114,15 @@ main(int argc, const char *const *argv) {
     perror("socket failed");
     return EXIT_FAILURE;
   }
-  struct sockaddr_in addr;
+  struct sockaddr_in addr = {
 #ifndef LOCAL
-      addr.sin_port = htons(SLAVE_PORT);
+      .sin_port = htons(SLAVE_PORT),
 #else
-      addr.sin_port = htons(SLAVE_PORT + port_offs);
+      .sin_port = htons(SLAVE_PORT + port_offs),
 #endif
-      addr.sin_family = AF_INET;
-      addr.sin_addr = {INADDR_ANY};
+      .sin_family = AF_INET,
+      .sin_addr = INADDR_ANY,
+  };
   int rc = bind(sk, (struct sockaddr *)&addr, sizeof(addr));
   if (rc != 0) {
     perror("bind failed");
@@ -136,14 +134,15 @@ main(int argc, const char *const *argv) {
     perror("socket failed");
     exit(EXIT_FAILURE);
   }
-  struct sockaddr_in heartbeat_sk_addr;
+  struct sockaddr_in heartbeat_sk_addr = {
 #ifndef LOCAL
-  heartbeat_sk_addr.sin_port = htons(SLAVE_HEARTBEAT_PORT);
+      .sin_port = htons(SLAVE_HEARTBEAT_PORT),
 #else
-  heartbeat_sk_addr.sin_port = htons(SLAVE_HEARTBEAT_PORT + port_offs);
+      .sin_port = htons(SLAVE_HEARTBEAT_PORT + port_offs),
 #endif
-  heartbeat_sk_addr.sin_family = AF_INET;
-  heartbeat_sk_addr.sin_addr = {INADDR_ANY};
+      .sin_family = AF_INET,
+      .sin_addr = INADDR_ANY,
+  };
   rc = bind((int)heartbeat_sk, (struct sockaddr *)&heartbeat_sk_addr,
             sizeof(heartbeat_sk_addr));
   if (rc != 0) {
@@ -154,12 +153,11 @@ main(int argc, const char *const *argv) {
   pthread_t heartbeat_tid = 0;
   while (true) {
   loop:
-    std::atomic_flag_clear(&stop_heartbeat);
     if (heartbeat_tid != 0) {
+      pthread_cancel(heartbeat_tid);
       pthread_join(heartbeat_tid, NULL);
     }
 
-    std::atomic_flag_test_and_set(&stop_heartbeat);
 #ifndef LOCAL
     rc = pthread_create(&heartbeat_tid, NULL, heartbeat, NULL);
 #else
@@ -170,13 +168,6 @@ main(int argc, const char *const *argv) {
       return EXIT_FAILURE;
     }
 
-    struct timespec start;
-    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-    if (rc != 0) {
-      perror("clock_gettime failed");
-      return EXIT_FAILURE;
-    }
-    struct timespec curr = start;
     fd_set rfd;
     FD_ZERO(&rfd);
     FD_SET(sk, &rfd);
@@ -228,12 +219,13 @@ main(int argc, const char *const *argv) {
     }
     assert(bytes_sent == sizeof(response));
 
+    struct timespec start;
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &start);
     if (rc != 0) {
       perror("clock_gettime failed");
       return EXIT_FAILURE;
     }
-    curr = start;
+    struct timespec curr = start;
     struct timeval master_shard_timeout = {
         .tv_sec = 30,
         .tv_usec = 0,
@@ -254,22 +246,22 @@ main(int argc, const char *const *argv) {
       size_t task_msg_sz = sizeof(size_t) + 2 * sizeof(real);
       ssize_t bytes_read = recvfrom(sk, data_buf, task_msg_sz, 0, NULL, NULL);
       if (bytes_read == 0) {
-        goto update_curr1;
+        goto update_curr;
       }
       if (bytes_read == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          goto update_curr1;
+          goto update_curr;
         }
         perror("recvfrom failed");
         return EXIT_FAILURE;
       }
       if (bytes_read != task_msg_sz) {
-        goto update_curr1;
+        goto update_curr;
       }
 
       break;
 
-    update_curr1:
+    update_curr:
       rc = clock_gettime(CLOCK_MONOTONIC_RAW, &curr);
       if (rc != 0) {
         perror("clock_gettime failed");
@@ -374,11 +366,6 @@ heartbeat(void *state) {
   }
 
   while (true) {
-    bool flag = std::atomic_flag_test_and_set(&stop_heartbeat);
-    if (!flag) {
-      return NULL;
-    }
-
     size_t heartbeat_msg = 0xDEDEDEDED;
     ssize_t bytes_sent =
         sendto(sk, &heartbeat_msg, sizeof(heartbeat_msg), 0,
