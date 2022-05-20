@@ -227,10 +227,10 @@ main(int argc, const char *const *argv) {
     }
     struct timespec curr = start;
     struct timeval master_shard_timeout = {
-        .tv_sec = 30,
-        .tv_usec = 0,
+        .tv_sec = 0,
+        .tv_usec = 100000,
     };
-    while (curr.tv_sec - start.tv_sec < master_shard_timeout.tv_sec) {
+    do {
       fd_set dirty_rfd = rfd;
 
       int ready = select(sk + 1, &dirty_rfd, NULL, NULL, &master_shard_timeout);
@@ -267,11 +267,11 @@ main(int argc, const char *const *argv) {
         perror("clock_gettime failed");
         return EXIT_FAILURE;
       }
-    }
-    if (curr.tv_sec - start.tv_sec > master_shard_timeout.tv_sec) {
-      printf("MASTER ERROR: failed to receive shard information\n");
-      goto loop;
-    }
+    } while (curr.tv_sec + curr.tv_nsec - start.tv_sec - start.tv_nsec < master_shard_timeout.tv_sec + master_shard_timeout.tv_usec);
+//    if (curr.tv_sec + curr.tv_nsec - start.tv_sec - start.tv_nsec < master_shard_timeout.tv_sec + master_shard_timeout.tv_usec) {
+//      printf("MASTER ERROR: failed to receive shard information\n");
+//      goto loop;
+//    }
 
     real shard_begin;
     real shard_end;
@@ -375,7 +375,7 @@ heartbeat(void *state) {
       exit(EXIT_FAILURE);
     }
     assert(bytes_sent == sizeof(heartbeat_msg));
-    sleep(20);
+    sleep(30);
   }
 }
 
