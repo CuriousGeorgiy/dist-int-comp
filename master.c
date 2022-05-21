@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -7,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <netinet/in.h>
 
@@ -42,7 +44,7 @@ struct heartbeat_state {
 
 static const real domain_sz = 5;
 
-static void *
+_Noreturn static void *
 heartbeat(void *state);
 
 int
@@ -79,52 +81,27 @@ main(int argc, const char *const *argv) {
   shards[n_shards - 1].end = domain_sz;
 
   int broadcast_sk = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
-  if (broadcast_sk < 0) {
-    perror("socket failed");
-    return EXIT_FAILURE;
-  }
   struct sockaddr_in addr = {
       .sin_addr = INADDR_ANY,
       .sin_port = htons(MASTER_PORT),
       .sin_family = AF_INET,
   };
-  int rc = bind(broadcast_sk, (struct sockaddr *)&addr, sizeof(addr));
-  if (rc != 0) {
-    perror("bind failed");
-    return EXIT_FAILURE;
-  }
+  bind(broadcast_sk, (struct sockaddr *)&addr, sizeof(addr));
   int opt = 1;
-  rc = setsockopt(broadcast_sk, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
-  if (rc != 0) {
-    perror("setsockopt failed");
-    return EXIT_FAILURE;
-  }
+  setsockopt(broadcast_sk, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
 
   struct heartbeat_state heartbeat_state = {
       .sk = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0),
       .slaves_cnt = n_shards,
   };
-  if (heartbeat_state.sk < 0) {
-    perror("socket failed");
-    return EXIT_FAILURE;
-  }
    struct sockaddr_in heartbeat_addr = {
       .sin_addr = INADDR_ANY,
       .sin_port = htons(MASTER_HEARTBEAT_PORT),
       .sin_family = AF_INET,
   };
-  rc = bind(heartbeat_state.sk, (struct sockaddr *)&heartbeat_addr,
-                sizeof(heartbeat_addr));
-  if (rc != 0) {
-    perror("bind failed");
-    return EXIT_FAILURE;
-  }
-  rc = setsockopt(heartbeat_state.sk, SOL_SOCKET, SO_BROADCAST, &opt,
-                  sizeof(opt));
-  if (rc != 0) {
-    perror("setsockopt failed");
-    return EXIT_FAILURE;
-  }
+  bind(heartbeat_state.sk, (struct sockaddr *)&heartbeat_addr,
+        sizeof(heartbeat_addr));
+  setsockopt(heartbeat_state.sk, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
 
   char data_buf[DATA_BUF_SZ];
   uint64_t broadcast_msg = 0xDEADBEEF;
@@ -135,35 +112,19 @@ main(int argc, const char *const *argv) {
 
   for (size_t i = 0; i < SLAVE_PORT_OFFS_MAX; ++i) {
     broadcast_addr.sin_port = htons(SLAVE_PORT + i);
-    ssize_t bytes_sent =
-      sendto(broadcast_sk, &broadcast_msg, sizeof(broadcast_msg), 0,
-             (struct sockaddr *)&broadcast_addr,  sizeof(broadcast_addr));
-    if (bytes_sent == -1) {
-      perror("sendto failed");
-      return EXIT_FAILURE;
-    }
-    assert(bytes_sent == sizeof(broadcast_msg));
+    sendto(broadcast_sk, &broadcast_msg, sizeof(broadcast_msg), 0,
+           (struct sockaddr *)&broadcast_addr,  sizeof(broadcast_addr));
   }
 
   broadcast_msg = 0xDADBEEFDAD;
   for (size_t i = 0; i < SLAVE_PORT_OFFS_MAX; ++i) {
     broadcast_addr.sin_port = htons(SLAVE_HEARTBEAT_PORT + i);
-    ssize_t bytes_sent =
-        sendto(heartbeat_state.sk, &broadcast_msg, sizeof(broadcast_msg), 0,
-               (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
-    if (bytes_sent == -1) {
-      perror("sendto failed");
-      return EXIT_FAILURE;
-    }
-    assert(bytes_sent == sizeof(broadcast_msg));
+    sendto(heartbeat_state.sk, &broadcast_msg, sizeof(broadcast_msg), 0,
+           (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
   }
 
   struct timespec start;
-  rc = clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-  if (rc != 0) {
-    perror("clock_gettime failed");
-    return EXIT_FAILURE;
-  }
+  clock_gettime(CLOCK_MONOTONIC_RAW, &start);
   struct timeval accept_slaves_timeout = {
       .tv_sec = 30,
       .tv_usec = 0,
@@ -172,52 +133,33 @@ main(int argc, const char *const *argv) {
   fd_set rfd;
   FD_ZERO(&rfd);
   FD_SET(broadcast_sk, &rfd);
-  uint64_t slave_msg = 0xBEEFDED;
   size_t shards_cnt = 0;
   while (curr.tv_sec - start.tv_sec < accept_slaves_timeout.tv_sec) {
     fd_set dirty_rfd = rfd;
 
     int ready = select(broadcast_sk + 1, &dirty_rfd, NULL, NULL,
                        &accept_slaves_timeout);
-    if (ready == -1) {
-      perror("select failed");
-      return EXIT_FAILURE;
-    }
     if (ready == 0) {
       break;
     }
 
+    uint64_t slave_msg = 0xBEEFDED;
     socklen_t addr_sz = sizeof(shards[0].addr);
     ssize_t bytes_read =
         recvfrom(broadcast_sk, data_buf, sizeof(slave_msg), 0,
                  (struct sockaddr *)&shards[shards_cnt].addr, &addr_sz);
-    if (bytes_read == 0) {
-      goto update_curr0;
-    }
-    if (bytes_read == -1) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        goto update_curr0;
-      }
-      perror("recvfrom failed");
-      return EXIT_FAILURE;
-    }
     if (bytes_read != sizeof(slave_msg) ||
         memcmp(data_buf, &slave_msg, sizeof(slave_msg)) != 0) {
-      goto update_curr0;
+      goto update_curr;
     }
-    assert(addr_sz == sizeof(struct sockaddr_in));
 
     ++shards_cnt;
     if (shards_cnt == n_shards) {
       break;
     }
 
-  update_curr0:
-    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &curr);
-    if (rc != 0) {
-      perror("clock_gettime failed");
-      return EXIT_FAILURE;
-    }
+  update_curr:
+    clock_gettime(CLOCK_MONOTONIC_RAW, &curr);
   }
   if (shards_cnt != n_shards) {
     printf("MASTER ERROR: slaves did not connect\n");
@@ -230,48 +172,19 @@ main(int argc, const char *const *argv) {
     memcpy(data_buf + sizeof(i) + sizeof(shards[i].begin), &shards[i].end,
            sizeof(shards[i].end));
     size_t msg_sz = sizeof(i) + sizeof(shards[i].begin) + sizeof(shards[i].end);
-    ssize_t bytes_sent =
-        sendto(broadcast_sk, data_buf, msg_sz, 0,
-               (struct sockaddr *)&shards[i].addr, sizeof(shards[i].addr));
-    if (bytes_sent == -1) {
-      perror("sendto failed");
-      return EXIT_FAILURE;
-    }
-    assert(bytes_sent == msg_sz);
+    sendto(broadcast_sk, data_buf, msg_sz, 0,
+           (struct sockaddr *)&shards[i].addr, sizeof(shards[i].addr));
   }
 
   pthread_t heartbeat_tid;
-  rc = pthread_create(&heartbeat_tid, NULL, heartbeat, &heartbeat_state);
-  if (rc != 0) {
-    perror("pthread_create failed");
-    return EXIT_FAILURE;
-  }
+  pthread_create(&heartbeat_tid, NULL, heartbeat, &heartbeat_state);
 
+  fcntl(broadcast_sk, F_SETFL, 0);
   real int_sum = 0;
   ssize_t shards_ready = 0;
   while (true) {
-    fd_set dirty_rfd = rfd;
-    int ready =
-        select(broadcast_sk + 1, &dirty_rfd, NULL, NULL, NULL);
-    if (ready == -1) {
-      perror("select failed");
-      return EXIT_FAILURE;
-    }
-    assert(ready != 0);
-
     size_t msg_sz = sizeof(size_t) + sizeof(real);
-    ssize_t bytes_read =
-        recvfrom(broadcast_sk, data_buf, msg_sz, 0, NULL, NULL);
-    if (bytes_read == 0) {
-      continue;
-    }
-    if (bytes_read == -1) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        continue;
-      }
-      perror("recvfrom failed");
-      return EXIT_FAILURE;
-    }
+    ssize_t bytes_read = recvfrom(broadcast_sk, data_buf, msg_sz, 0, NULL, NULL);
     if (bytes_read != msg_sz) {
       continue;
     }
@@ -297,11 +210,7 @@ heartbeat(void *state) {
 
   while (true) {
     struct timespec start;
-    int rc = clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-    if (rc != 0) {
-      perror("clock_gettime failed");
-      exit(EXIT_FAILURE);
-    }
+    clock_gettime(CLOCK_MONOTONIC, &start);
     struct timeval timeout = {
         .tv_sec = 30,
         .tv_usec = 0,
@@ -315,49 +224,29 @@ heartbeat(void *state) {
       fd_set dirty_rfd = rfd;
       int ready = select(heartbeat_state->sk + 1, &dirty_rfd, NULL, NULL,
                          &timeout);
-      if (ready == -1) {
-        perror("select failed");
-        exit(EXIT_FAILURE);
-      }
       if (ready == 0) {
+        printf("HEARTBEAT ERROR: select timed out");
         break;
       }
 
       char data_buf[DATA_BUF_SZ];
-      size_t heartbeat_msg = 0xDEDEDEDED;
-      ssize_t bytes_read = recvfrom(heartbeat_state->sk, data_buf,
-                                    sizeof(heartbeat_msg), 0,  NULL, NULL);
-      if (bytes_read == 0) {
-        goto update_curr0;
-      }
-      if (bytes_read == -1) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          goto update_curr0;
-        }
-        perror("recvfrom failed");
-        exit(EXIT_FAILURE);
-      }
-      if (bytes_read != sizeof(heartbeat_msg) ||
-        memcmp(data_buf, &heartbeat_msg, sizeof(heartbeat_msg)) != 0) {
-        goto update_curr0;
-      }
-      assert(addr_sz == sizeof(struct sockaddr_in));
+      recvfrom(heartbeat_state->sk, data_buf, sizeof(uint64_t), 0,  NULL, NULL);
 
       ++slaves_cnt;
       if (slaves_cnt == heartbeat_state->slaves_cnt) {
         break;
       }
 
-    update_curr0:
-      rc = clock_gettime(CLOCK_MONOTONIC_RAW, &curr);
-      if (rc != 0) {
-        perror("clock_gettime failed");
-        exit(EXIT_FAILURE);
-      }
+      clock_gettime(CLOCK_MONOTONIC, &curr);
     }
     if (slaves_cnt != heartbeat_state->slaves_cnt) {
-      printf("HEARTBEAT ERROR: no heartbeat from slave\n");
+      printf("HEARTBEAT ERROR: received %zu heartbeats from %ld slaves\n",
+             slaves_cnt, heartbeat_state->slaves_cnt);
       exit(EXIT_FAILURE);
+    }
+    clock_gettime(CLOCK_MONOTONIC, &curr);
+    if (curr.tv_sec - start.tv_sec < timeout.tv_sec) {
+      sleep(timeout.tv_sec - curr.tv_sec + start.tv_sec);
     }
   }
 }
